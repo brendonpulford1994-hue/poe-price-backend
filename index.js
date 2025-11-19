@@ -12,6 +12,17 @@ const PORT = process.env.PORT || 3001;
 const POE_TRADE_API_BASE_URL = 'https://www.pathofexile.com/api/trade';
 const POE_TRADE_SITE_URL = 'https://www.pathofexile.com/trade';
 
+// Pretend to be a normal browser so PoE is less likely to 403 us
+const DEFAULT_HEADERS = {
+  'Content-Type': 'application/json',
+  Accept: 'application/json',
+  // Very standard desktop Chrome UA string
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+  // A referer that matches normal trade usage
+  Referer: 'https://www.pathofexile.com/trade/search',
+};
+
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
@@ -23,10 +34,10 @@ function buildSearchQuery(item) {
       status: { option: 'online' },
       filters: {
         type_filters: { filters: {} },
-        misc_filters: { filters: {} }
-      }
+        misc_filters: { filters: {} },
+      },
     },
-    sort: { price: 'asc' }
+    sort: { price: 'asc' },
   };
 
   const filters = query.query.filters;
@@ -37,7 +48,7 @@ function buildSearchQuery(item) {
 
   if (item.rarity) {
     filters.type_filters.filters.rarity = {
-      option: String(item.rarity).toLowerCase()
+      option: String(item.rarity).toLowerCase(),
     };
   }
 
@@ -48,7 +59,7 @@ function buildSearchQuery(item) {
       Crusader: 'crusader_item',
       Redeemer: 'redeemer_item',
       Hunter: 'hunter_item',
-      Warlord: 'warlord_item'
+      Warlord: 'warlord_item',
     };
     const infFilters = {};
     for (const inf of item.influences) {
@@ -64,7 +75,7 @@ function buildSearchQuery(item) {
 
   if (item.links && item.links > 1) {
     query.query.filters.socket_filters = {
-      filters: { links: { min: item.links } }
+      filters: { links: { min: item.links } },
     };
   }
 
@@ -88,10 +99,7 @@ async function performSearchWithRetries(league, query, maxAttempts = 5) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await axios.post(url, query, {
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
-        }
+        headers: DEFAULT_HEADERS,
       });
 
       console.log('[PoE API] Search OK. total =', res.data.total);
@@ -100,15 +108,13 @@ async function performSearchWithRetries(league, query, maxAttempts = 5) {
       const status = err.response?.status;
       const body = err.response?.data;
       const msg =
-        body?.error?.message ||
-        err.message ||
-        String(err);
+        body?.error?.message || err.message || String(err);
 
       console.warn('[PoE API] Search error:', status, msg);
 
       if (msg.includes('Rate limit exceeded') || status === 429) {
         console.warn(
-          `[PoE API] Rate limited on search. Waiting 60s (attempt ${attempt + 1})`
+          `[PoE API] Rate limited on search. Waiting 60s (attempt ${attempt + 1})`,
         );
         await delay(60000);
         continue;
@@ -117,7 +123,7 @@ async function performSearchWithRetries(league, query, maxAttempts = 5) {
       if (msg.includes('Unknown item')) {
         if (query.query?.filters?.type_filters?.filters?.rarity) {
           console.warn(
-            '[PoE API] Unknown item. Removing rarity filter and retrying once...'
+            '[PoE API] Unknown item. Removing rarity filter and retrying once...',
           );
           delete query.query.filters.type_filters.filters.rarity;
           await delay(500);
@@ -128,7 +134,7 @@ async function performSearchWithRetries(league, query, maxAttempts = 5) {
       if (msg.includes('Invalid query')) {
         if (query.query?.filters?.misc_filters?.filters?.ilvl) {
           console.warn(
-            '[PoE API] Invalid query. Removing ilvl and socket filters and retrying once...'
+            '[PoE API] Invalid query. Removing ilvl and socket filters and retrying once...',
           );
           delete query.query.filters.misc_filters.filters.ilvl;
         }
@@ -148,16 +154,27 @@ async function performSearchWithRetries(league, query, maxAttempts = 5) {
   throw new Error('[PoE API] Max search retries reached');
 }
 
-async function fetchListingsWithRetries(fetchUrlWithQuery, fetchUrlNoQuery, maxAttempts = 3) {
+async function fetchListingsWithRetries(
+  fetchUrlWithQuery,
+  fetchUrlNoQuery,
+  maxAttempts = 3,
+) {
   let currentUrl = fetchUrlWithQuery;
   let triedWithoutQuery = false;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await axios.get(currentUrl, {
-        headers: { Accept: 'application/json' }
+        headers: {
+          ...DEFAULT_HEADERS,
+          // GET doesn’t strictly need Content-Type, but Accept + UA helps
+          'Content-Type': undefined,
+        },
       });
-      console.log('[PoE API] Fetch OK. results =', res.data.result?.length || 0);
+      console.log(
+        '[PoE API] Fetch OK. results =',
+        res.data.result?.length || 0,
+      );
       return res.data;
     } catch (err) {
       const status = err.response?.status;
@@ -165,8 +182,8 @@ async function fetchListingsWithRetries(fetchUrlWithQuery, fetchUrlNoQuery, maxA
       console.warn(
         `[PoE API] Fetch listings failed (status ${status}) body: ${text.slice(
           0,
-          200
-        )}`
+          200,
+        )}`,
       );
 
       if (
@@ -176,7 +193,7 @@ async function fetchListingsWithRetries(fetchUrlWithQuery, fetchUrlNoQuery, maxA
         currentUrl === fetchUrlWithQuery
       ) {
         console.warn(
-          '[PoE API] Fetch invalid query with ?query=. Retrying once without query param...'
+          '[PoE API] Fetch invalid query with ?query=. Retrying once without query param...',
         );
         currentUrl = fetchUrlNoQuery;
         triedWithoutQuery = true;
@@ -189,7 +206,7 @@ async function fetchListingsWithRetries(fetchUrlWithQuery, fetchUrlNoQuery, maxA
         console.warn(
           `[PoE API] Temporary fetch error. Retrying in ${waitMs}ms... (attempt ${
             attempt + 1
-          })`
+          })`,
         );
         await delay(waitMs);
         continue;
@@ -250,7 +267,7 @@ function calculatePriceStats(prices) {
     min,
     median,
     max,
-    results: prices
+    results: prices,
   };
 }
 
@@ -270,12 +287,14 @@ app.post('/price', async (req, res) => {
     const searchData = await performSearchWithRetries(league, query);
 
     if (!searchData?.result) {
-      return res.status(500).json({ error: 'Invalid search response from PoE API.' });
+      return res
+        .status(500)
+        .json({ error: 'Invalid search response from PoE API.' });
     }
 
     const resultIds = searchData.result.slice(0, 20);
     const searchUrl = `${POE_TRADE_SITE_URL}/search/${encodeURIComponent(
-      league
+      league,
     )}/${searchData.id}`;
 
     if (resultIds.length === 0) {
@@ -285,9 +304,9 @@ app.post('/price', async (req, res) => {
           min: null,
           median: null,
           max: null,
-          results: []
+          results: [],
         },
-        searchUrl
+        searchUrl,
       });
     }
 
@@ -297,7 +316,7 @@ app.post('/price', async (req, res) => {
 
     const fetchData = await fetchListingsWithRetries(
       fetchUrlWithQuery,
-      fetchUrlNoQuery
+      fetchUrlNoQuery,
     );
 
     const rawResults = fetchData?.result || [];
@@ -314,9 +333,9 @@ app.post('/price', async (req, res) => {
     return res.json({
       priceInfo: {
         ...stats,
-        totalResults: searchData.total ?? 0
+        totalResults: searchData.total ?? 0,
       },
-      searchUrl
+      searchUrl,
     });
   } catch (err) {
     console.error('[Backend] Error in /price:', err);
