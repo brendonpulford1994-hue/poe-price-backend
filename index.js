@@ -76,6 +76,7 @@ function buildSearchQuery(item) {
 
     statFilters.push({
       id,
+      type: 'and',          // 👈 REQUIRED so PoE actually uses this filter
       disabled: false,
       // no min/max: "has this mod with any roll"
       value: {
